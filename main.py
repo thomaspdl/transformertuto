@@ -1,13 +1,9 @@
-import sys
+import math
 import os
-
-current = os.path.dirname(os.path.realpath(__file__))
-parent = os.path.dirname(current)
-sys.path.append(parent)
+from tempfile import TemporaryDirectory
+from typing import Tuple
 
 import torch
-import time
-import torchvision
-import torchvision.transforms as transforms
-import argparse
-
+from torch import nn, Tensor
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.utils.data import dataset
