@@ -2,6 +2,7 @@ from torchtext.datasets import WikiText2
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
 import torch
+from transformer import TransformerModel
 
 train_iter = WikiText2(split='train')
 tokenizer = get_tokenizer('basic_english')
@@ -43,3 +44,78 @@ eval_batch_size = 10
 train_data = batchify(train_data, batch_size)  # shape ``[seq_len, batch_size]``
 val_data = batchify(val_data, eval_batch_size)
 test_data = batchify(test_data, eval_batch_size)
+
+bptt = 35
+def get_batch(source: Tensor, i: int) -> Tuple[Tensor, Tensor]:
+    """
+    Args:
+        source: Tensor, shape ``[full_seq_len, batch_size]``
+        i: int
+
+    Returns:
+        tuple (data, target), where data has shape ``[seq_len, batch_size]`` and
+        target has shape ``[seq_len * batch_size]``
+    """
+    seq_len = min(bptt, len(source) - 1 - i)
+    data = source[i:i+seq_len]
+    target = source[i+1:i+1+seq_len].reshape(-1)
+    return data, target
+
+
+ntokens = len(vocab)  # size of vocabulary
+emsize = 200  # embedding dimension
+d_hid = 200  # dimension of the feedforward network model in ``nn.TransformerEncoder``
+nlayers = 2  # number of ``nn.TransformerEncoderLayer`` in ``nn.TransformerEncoder``
+nhead = 2  # number of heads in ``nn.MultiheadAttention``
+dropout = 0.2  # dropout probability
+model = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout).to(device)
+
+
+import time
+
+criterion = nn.CrossEntropyLoss()
+lr = 5.0  # learning rate
+optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+
+def train(model: nn.Module) -> None:
+    model.train()  # turn on train mode
+    total_loss = 0.
+    log_interval = 200
+    start_time = time.time()
+
+    num_batches = len(train_data) // bptt
+    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
+        data, targets = get_batch(train_data, i)
+        output = model(data)
+        output_flat = output.view(-1, ntokens)
+        loss = criterion(output_flat, targets)
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+
+        total_loss += loss.item()
+        if batch % log_interval == 0 and batch > 0:
+            lr = scheduler.get_last_lr()[0]
+            ms_per_batch = (time.time() - start_time) * 1000 / log_interval
+            cur_loss = total_loss / log_interval
+            ppl = math.exp(cur_loss)
+            print(f'| epoch {epoch:3d} | {batch:5d}/{num_batches:5d} batches | '
+                  f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '
+                  f'loss {cur_loss:5.2f} | ppl {ppl:8.2f}')
+            total_loss = 0
+            start_time = time.time()
+
+def evaluate(model: nn.Module, eval_data: Tensor) -> float:
+    model.eval()  # turn on evaluation mode
+    total_loss = 0.
+    with torch.no_grad():
+        for i in range(0, eval_data.size(0) - 1, bptt):
+            data, targets = get_batch(eval_data, i)
+            seq_len = data.size(0)
+            output = model(data)
+            output_flat = output.view(-1, ntokens)
+            total_loss += seq_len * criterion(output_flat, targets).item()
+    return total_loss / (len(eval_data) - 1)
