@@ -8,6 +8,8 @@ from torch import nn, Tensor
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import dataset
 
+# source: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+
 
 class PositionalEncoding(nn.Module):
 

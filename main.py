@@ -4,6 +4,10 @@ from torchtext.vocab import build_vocab_from_iterator
 import torch
 from transformer import TransformerModel
 
+
+# source: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+
+
 train_iter = WikiText2(split='train')
 tokenizer = get_tokenizer('basic_english')
 vocab = build_vocab_from_iterator(map(tokenizer, train_iter), specials=['<unk>'])
