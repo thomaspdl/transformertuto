@@ -6,6 +6,10 @@ import math, copy, time
 from torch.autograd import Variable
 import matplotlib.pyplot as plt
 import seaborn
+from torchtext import data, datasets
+
+import spacy
+
 seaborn.set_context(context="talk")
 
 # tuto from https://nlp.seas.harvard.edu/2018/04/03/attention.html#positional-encoding
@@ -347,5 +351,143 @@ def get_std_opt(model):
     return NoamOpt(model.src_embed[0].d_model, 2, 4000,
             torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
 
+class LabelSmoothing(nn.Module):
+    "Implement label smoothing."
+    def __init__(self, size, padding_idx, smoothing=0.0):
+        super(LabelSmoothing, self).__init__()
+        self.criterion = nn.KLDivLoss(size_average=False)
+        self.padding_idx = padding_idx
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+        self.size = size
+        self.true_dist = None
+        
+    def forward(self, x, target):
+        assert x.size(1) == self.size
+        true_dist = x.data.clone()
+        true_dist.fill_(self.smoothing / (self.size - 2))
+        true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
+        true_dist[:, self.padding_idx] = 0
+        mask = torch.nonzero(target.data == self.padding_idx)
+        if mask.dim() > 0:
+            true_dist.index_fill_(0, mask.squeeze(), 0.0)
+        self.true_dist = true_dist
+        return self.criterion(x, Variable(true_dist, requires_grad=False))
 
+
+# create model for fun
 tmp_model = make_model(10, 10, 2)
+
+# first example: synthetic data
+
+def data_gen(V, batch, nbatches):
+    "Generate random data for a src-tgt copy task."
+    for i in range(nbatches):
+        data = torch.from_numpy(np.random.randint(1, V, size=(batch, 10)))
+        data[:, 0] = 1
+        src = Variable(data, requires_grad=False)
+        tgt = Variable(data, requires_grad=False)
+        yield Batch(src, tgt, 0)
+
+# Loss Computation
+class SimpleLossCompute:
+    "A simple loss compute and train function."
+    def __init__(self, generator, criterion, opt=None):
+        self.generator = generator
+        self.criterion = criterion
+        self.opt = opt
+        
+    def __call__(self, x, y, norm):
+        x = self.generator(x)
+        loss = self.criterion(x.contiguous().view(-1, x.size(-1)), 
+                              y.contiguous().view(-1)) / norm
+        loss.backward()
+        if self.opt is not None:
+            self.opt.step()
+            self.opt.optimizer.zero_grad()
+        return loss.item() * norm
+    
+# ##############################
+# # Train the simple copy task.
+# # We can begin by trying out a simple copy-task. Given a random set of input symbols from a small vocabulary, the goal is to generate back those same symbols.
+# # Greedy Decoding
+# V = 11
+# criterion = LabelSmoothing(size=V, padding_idx=0, smoothing=0.0)
+# model = make_model(V, V, N=2)
+# model_opt = NoamOpt(model.src_embed[0].d_model, 1, 400,
+#         torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
+
+# for epoch in range(10):
+#     model.train()
+#     run_epoch(data_gen(V, 30, 20), model, 
+#               SimpleLossCompute(model.generator, criterion, model_opt))
+#     model.eval()
+#     print(run_epoch(data_gen(V, 30, 5), model, 
+#                     SimpleLossCompute(model.generator, criterion, None)))
+
+
+# def greedy_decode(model, src, src_mask, max_len, start_symbol):
+#     memory = model.encode(src, src_mask)
+#     ys = torch.ones(1, 1).fill_(start_symbol).type_as(src.data)
+#     for i in range(max_len-1):
+#         out = model.decode(memory, src_mask, 
+#                            Variable(ys), 
+#                            Variable(subsequent_mask(ys.size(1))
+#                                     .type_as(src.data)))
+#         prob = model.generator(out[:, -1])
+#         _, next_word = torch.max(prob, dim = 1)
+#         next_word = next_word.data[0]
+#         ys = torch.cat([ys, 
+#                         torch.ones(1, 1).type_as(src.data).fill_(next_word)], dim=1)
+#     return ys
+
+# model.eval()
+# src = Variable(torch.LongTensor([[1,2,3,4,5,6,7,8,9,10]]) )
+# src_mask = Variable(torch.ones(1, 1, 10) )
+# print(greedy_decode(model, src, src_mask, max_len=10, start_symbol=1))
+
+
+
+# class MyIterator(data.Iterator):
+#     def create_batches(self):
+#         if self.train:
+#             def pool(d, random_shuffler):
+#                 for p in data.batch(d, self.batch_size * 100):
+#                     p_batch = data.batch(
+#                         sorted(p, key=self.sort_key),
+#                         self.batch_size, self.batch_size_fn)
+#                     for b in random_shuffler(list(p_batch)):
+#                         yield b
+#             self.batches = pool(self.data(), self.random_shuffler)
+            
+#         else:
+#             self.batches = []
+#             for b in data.batch(self.data(), self.batch_size,
+#                                           self.batch_size_fn):
+#                 self.batches.append(sorted(b, key=self.sort_key))
+
+# def rebatch(pad_idx, batch):
+#     "Fix order in torchtext to match ours"
+#     src, trg = batch.src.transpose(0, 1), batch.trg.transpose(0, 1)
+#     return Batch(src, trg, pad_idx)
+
+
+# spacy_de = spacy.load("de_core_news_sm")
+# spacy_en = spacy.load("en_core_web_sm")
+
+# def tokenize_de(text):
+#     return [tok.text for tok in spacy_de.tokenizer(text)]
+
+# def tokenize_en(text):
+#     return [tok.text for tok in spacy_en.tokenizer(text)]
+
+# BOS_WORD = '<s>'
+# EOS_WORD = '</s>'
+# BLANK_WORD = "<blank>"
+
+
+# from torchtext.legacy.data import Field
+
+
+from torchtext.experimental.datasets import AG_NEWS
+train, test = AG_NEWS(ngrams=3)
